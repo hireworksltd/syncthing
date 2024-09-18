@@ -85,6 +85,7 @@ type folder struct {
 	versioner versioner.Versioner
 
 	warnedKqueue bool
+	lastErrorCount int
 }
 
 type syncRequest struct {
@@ -442,6 +443,7 @@ func (f *folder) scanSubdirs(subDirs []string) error {
 	if err != nil {
 		return err
 	}
+	f.lastErrorCount = len(f.scanErrors) // hold last error count
 	f.setError(nil)
 
 	// Check on the way out if the ignore patterns changed as part of scanning
@@ -527,20 +529,27 @@ func (f *folder) scanSubdirs(subDirs []string) error {
 
 	// Do a scan of the database for each prefix, to check for deleted and
 	// ignored files.
+    l.Debugf("Current error count:", len(f.scanErrors))
+    l.Debugf("Last error count:", f.lastErrorCount)
 
-	changesHere, err = f.scanSubdirsDeletedAndIgnored(subDirs, batch)
-	changes += changesHere
-	if err != nil {
-		return err
-	}
+	if f.lastErrorCount == 0 && len(f.scanErrors) == 0 {
+		changesHere, err = f.scanSubdirsDeletedAndIgnored(subDirs, batch)
+		changes += changesHere
+		if err != nil {
+			return err
+		}
 
-	if err := batch.Flush(); err != nil {
-		return err
+		if err := batch.Flush(); err != nil {
+			return err
+		}
+        } else {
+        	f.ScheduleScan()
 	}
 
 	f.ScanCompleted()
 	return nil
 }
+
 
 const maxToRemove = 1000
 
