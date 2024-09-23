@@ -1094,16 +1094,16 @@ func (f *sendReceiveFolder) renameFile(cur, source, target protocol.FileInfo, sn
 func (f *sendReceiveFolder) handleFile(file protocol.FileInfo, snap *db.Snapshot, copyChan chan<- copyBlocksState) {
 	
 	available := false
-   	for _, dev := range snap.Availability(file.Name) {
-      		if !f.model.IsFolderPausedOnDevice(f.folderID, dev) {
-            	available = true
-            	break
-        	}
-    	}
+	for _, dev := range snap.Availability(file.Name) {
+		if !f.model.IsFolderPausedOnDevice(f.folderID, dev) {
+		available = true
+		break
+		}
+	}
 
 	if !available {
 		f.newPullError(file.Name, fmt.Errorf("file not available on any connected device"))
-        	return
+		return
 	}
 	
 	curFile, hasCurFile := snap.Get(protocol.LocalDeviceID, file.Name)
