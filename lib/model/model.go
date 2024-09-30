@@ -110,7 +110,6 @@ type Model interface {
 	FolderStatistics() (map[string]stats.FolderStatistics, error)
 	UsageReportingStats(report *contract.Report, version int, preview bool)
 	ConnectedTo(remoteID protocol.DeviceID) bool
-	IsFolderPausedOnDevice(folder string, device protocol.DeviceID) bool
 
 	PendingDevices() (map[protocol.DeviceID]db.ObservedDevice, error)
 	PendingFolders(device protocol.DeviceID) (map[string]db.PendingFolder, error)
@@ -2194,20 +2193,6 @@ func (m *model) ConnectedTo(deviceID protocol.DeviceID) bool {
 	_, ok := m.deviceConnIDs[deviceID]
 	m.mut.RUnlock()
 	return ok
-}
-
-// Check if folderstate is valid for a particular device (i.e not paused)
-func (m *model) IsFolderPausedOnDevice(folder string, device protocol.DeviceID) bool {
-	m.mut.RLock()
-	defer m.mut.RUnlock()
-
-	if states, ok := m.remoteFolderStates[device]; ok {
-		if state, ok := states[folder]; ok {
-			return state != remoteFolderValid
-		}
-	}
-
-	return false
 }
 
 // LoadIgnores loads or refreshes the ignore patterns from disk, if the
