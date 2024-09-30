@@ -505,19 +505,22 @@ nextFile:
 			continue nextFile
 		}
 
-		devices := snap.Availability(fileName)
-		for _, dev := range devices {
-			if f.model.ConnectedTo(dev) {
-				// Handle the file normally, by copying and pulling, etc.
-				f.handleFile(fi, snap, copyChan)
-				continue nextFile
-			}
+		devices: = snap.Availability(fileName)
+		for _, dev: = range devices {
+		    if f.model.ConnectedTo(dev) {
+		        // Check if the remote folder state is valid on connected device (i.e. not paused)
+		        if state, ok: = f.model.remoteFolderStates[dev][f.folderID]; ok {
+		            if state == remoteFolderValid {
+		                // Handle the file normally, by copying and pulling, etc.
+		                f.handleFile(fi, snap, copyChan)
+		                continue nextFile
+		            }
+		        }
+		    }
+		    f.newPullError(fileName, errNotAvailable)
+		    f.queue.Done(fileName)
 		}
-		f.newPullError(fileName, errNotAvailable)
-		f.queue.Done(fileName)
-	}
-
-	return changed, fileDeletions, dirDeletions, nil
+		return changed, fileDeletions, dirDeletions, nil
 }
 
 func popCandidate(buckets map[string][]protocol.FileInfo, key string) (protocol.FileInfo, bool) {
@@ -1092,19 +1095,6 @@ func (f *sendReceiveFolder) renameFile(cur, source, target protocol.FileInfo, sn
 // handleFile queues the copies and pulls as necessary for a single new or
 // changed file.
 func (f *sendReceiveFolder) handleFile(file protocol.FileInfo, snap *db.Snapshot, copyChan chan<- copyBlocksState) {
-	
-	available := false
-	for _, dev := range snap.Availability(file.Name) {
-		if !f.model.IsFolderPausedOnDevice(f.folderID, dev) {
-		available = true
-		break
-		}
-	}
-
-	if !available {
-		f.newPullError(file.Name, fmt.Errorf("file not available on any connected device"))
-		return
-	}
 	
 	curFile, hasCurFile := snap.Get(protocol.LocalDeviceID, file.Name)
 
