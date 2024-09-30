@@ -507,19 +507,20 @@ nextFile:
 
 		devices: = snap.Availability(fileName)
 		for _, dev: = range devices {
-		    if f.model.ConnectedTo(dev) {
-		        // Check if the remote folder state is valid on connected device (i.e. not paused)
-		        if state, ok: = f.model.remoteFolderStates[dev][f.folderID]; ok {
-		            if state == remoteFolderValid {
-		                // Handle the file normally, by copying and pulling, etc.
-		                f.handleFile(fi, snap, copyChan)
-		                continue nextFile
-		            }
-		        }
-		    }
-		    f.newPullError(fileName, errNotAvailable)
-		    f.queue.Done(fileName)
+			if f.model.ConnectedTo(dev) {
+				// Check if the remote folder state is valid on connected device (i.e. not paused)
+				if state, ok: = f.model.remoteFolderStates[dev][f.folderID]; ok {
+					if state == remoteFolderValid {
+					// Handle the file normally, by copying and pulling, etc.
+					f.handleFile(fi, snap, copyChan)
+					continue nextFile
+					}
+				}
+			}
+		f.newPullError(fileName, errNotAvailable)
+		f.queue.Done(fileName)
 		}
+		
 		return changed, fileDeletions, dirDeletions, nil
 }
 
