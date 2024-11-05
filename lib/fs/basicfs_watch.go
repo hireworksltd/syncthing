@@ -12,7 +12,6 @@
 // +build !android !amd64
 // +build !ios
 
-=======
 
 package fs
 
