@@ -282,6 +282,7 @@ func (s *service) Serve(ctx context.Context) error {
 	restMux.HandlerFunc(http.MethodGet, "/rest/system/log.txt", s.getSystemLogTxt)            // [since]
 
 	// The POST handlers
+        restMux.HandlerFunc(http.MethodPost, "/rest/folder/reschedule", s.postRescheduleFolder)
 	restMux.HandlerFunc(http.MethodPost, "/rest/db/prio", s.postDBPrio)                          // folder file
 	restMux.HandlerFunc(http.MethodPost, "/rest/db/ignores", s.postDBIgnores)                    // folder
 	restMux.HandlerFunc(http.MethodPost, "/rest/db/override", s.postDBOverride)                  // folder
@@ -497,6 +498,31 @@ func (s *service) CommitConfiguration(from, to config.Configuration) bool {
 	s.configChanged <- struct{}{}
 
 	return true
+}
+
+func (s *service) postRescheduleFolder(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        Folder string `json:"folder"`
+    }
+
+    err := json.NewDecoder(r.Body).Decode(&req)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
+    if req.Folder == "" {
+        http.Error(w, "folder parameter is required", http.StatusBadRequest)
+        return
+    }
+
+    err = s.model.RescheduleFolder(req.Folder)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    w.WriteHeader(http.StatusOK)
 }
 
 func (s *service) fatal(err *svcutil.FatalErr) {

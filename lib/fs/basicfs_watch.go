@@ -1,3 +1,4 @@
+
 // Copyright (C) 2016 The Syncthing Authors.
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -11,123 +12,136 @@
 // +build !android !amd64
 // +build !ios
 
+=======
+
 package fs
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
 	"unicode/utf8"
-
-	"github.com/syncthing/notify"
+	"github.com/sjansen/watchman" // Import Watchman client library
 )
 
 // Notify does not block on sending to channel, so the channel must be buffered.
-// The actual number is magic.
-// Not meant to be changed, but must be changeable for tests
 var backendBuffer = 500
 
 func (f *BasicFilesystem) Watch(name string, ignore Matcher, ctx context.Context, ignorePerms bool) (<-chan Event, <-chan error, error) {
-	watchPath, roots, err := f.watchPaths(name)
+	watchPath, _, err := f.watchPaths(name)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	outChan := make(chan Event)
-	backendChan := make(chan notify.EventInfo, backendBuffer)
+	// Clean up the watch path
+	watchPath = filepath.Clean(watchPath)
 
-	eventMask := subEventMask
-	if !ignorePerms {
-		eventMask |= permEventMask
-	}
+	// Prepare a separate variable for the AddWatch call without the "/..." suffix
+	addWatchPath := strings.TrimSuffix(watchPath, "/...")
 
-	absShouldIgnore := func(absPath string) bool {
-		if !utf8.ValidString(absPath) {
-			return true
-		}
+	outChan := make(chan Event, backendBuffer)
+	errChan := make(chan error, 100)
 
-		rel, err := f.unrootedChecked(absPath, roots)
-		if err != nil {
-			return true
-		}
-		return ignore.Match(rel).CanSkipDir()
-	}
-	err = notify.WatchWithFilter(watchPath, backendChan, absShouldIgnore, eventMask)
+	// Initialize the Watchman client
+	wClient, err := watchman.Connect()
 	if err != nil {
-		notify.Stop(backendChan)
-		if reachedMaxUserWatches(err) {
-			err = errors.New("failed to setup inotify handler. Please increase inotify limits, see https://docs.syncthing.net/users/faq.html#inotify-limits")
-		}
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to connect to Watchman: %w", err)
 	}
 
-	errChan := make(chan error)
-	go f.watchLoop(ctx, name, roots, backendChan, outChan, errChan, ignore)
+	// Ensure the client connection is closed when done
+	go func() {
+		<-ctx.Done()
+		wClient.Close()
+	}()
+
+	// Set up a watch on the directory without "/..."
+	watch, err := wClient.AddWatch(addWatchPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to set up watch for directory: %w", err)
+	}
+
+	// Subscribe to changes with a unique subscription name
+	sub, err := watch.Subscribe("sub-"+name, addWatchPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to subscribe to directory events: %w", err)
+	}
+
+	// Start the watch loop
+	go f.watchLoop(ctx, watchPath, wClient.Notifications(), outChan, errChan, ignore)
+
+	// Unsubscribe when context is done
+	go func() {
+		<-ctx.Done()
+		if err := sub.Unsubscribe(); err != nil {
+			errChan <- fmt.Errorf("failed to unsubscribe: %w", err)
+		}
+		wClient.Close()
+	}()
 
 	return outChan, errChan, nil
 }
 
-func (f *BasicFilesystem) watchLoop(ctx context.Context, name string, roots []string, backendChan chan notify.EventInfo, outChan chan<- Event, errChan chan<- error, ignore Matcher) {
+func (f *BasicFilesystem) watchLoop(ctx context.Context, rootPath string, notifications <-chan interface{}, outChan chan<- Event, errChan chan<- error, ignore Matcher) {
+	defer close(outChan)
+	defer close(errChan)
+
 	for {
-		// Detect channel overflow
-		if len(backendChan) == backendBuffer {
-		outer:
-			for {
-				select {
-				case <-backendChan:
-				default:
-					break outer
-				}
-			}
-			// When next scheduling a scan, do it on the entire folder as events have been lost.
-			outChan <- Event{Name: name, Type: NonRemove}
-			l.Debugln(f.Type(), f.URI(), "Watch: Event overflow, send \".\"")
-		}
-
 		select {
-		case ev := <-backendChan:
-			evPath := ev.Path()
-
-			if !utf8.ValidString(evPath) {
-				l.Debugln(f.Type(), f.URI(), "Watch: Ignoring invalid UTF-8")
+		case n := <-notifications:
+			changeNotif, ok := n.(*watchman.ChangeNotification)
+			if !ok || changeNotif.IsFreshInstance {
 				continue
 			}
 
-			relPath, err := f.unrootedChecked(evPath, roots)
-			if err != nil {
-				select {
-				case errChan <- err:
-					l.Debugln(f.Type(), f.URI(), "Watch: Sending error", err)
-				case <-ctx.Done():
+			// Process each file event in the change notification
+			for _, file := range changeNotif.Files {
+				// Create absolute path for use with unrootedChecked
+				absPath := filepath.Join(rootPath, file.Name)
+				
+				if !utf8.ValidString(absPath) {
+					l.Debugln(f.Type(), f.URI(), "Watch: Ignoring invalid UTF-8")
+					continue
 				}
-				notify.Stop(backendChan)
-				l.Debugln(f.Type(), f.URI(), "Watch: Stopped due to", err)
-				return
-			}
 
-			if ignore.Match(relPath).IsIgnored() {
-				l.Debugln(f.Type(), f.URI(), "Watch: Ignoring", relPath)
-				continue
-			}
-			evType := f.eventType(ev.Event())
-			select {
-			case outChan <- Event{Name: relPath, Type: evType}:
-				l.Debugln(f.Type(), f.URI(), "Watch: Sending", relPath, evType)
-			case <-ctx.Done():
-				notify.Stop(backendChan)
-				l.Debugln(f.Type(), f.URI(), "Watch: Stopped")
-				return
+				// Pass absolute path to unrootedChecked for validation
+				relPath, err := f.unrootedChecked(absPath, []string{rootPath})
+				if err != nil {
+					l.Debugln(f.Type(), f.URI(), "Watch: Event outside root path:", absPath)
+					continue
+				}
+
+				if ignore.Match(relPath).IsIgnored() {
+					l.Debugln(f.Type(), f.URI(), "Watch: Ignoring", relPath)
+					continue
+				}
+
+				evType := f.mapWatchmanEventType(file.Change)
+				select {
+				case outChan <- Event{Name: file.Name, Type: evType}: // Send only the relative path
+					l.Debugln(f.Type(), f.URI(), "Watch: Sending", file.Name, evType)
+				case <-ctx.Done():
+					l.Debugln(f.Type(), f.URI(), "Watch: Stopped")
+					return
+				}
 			}
 		case <-ctx.Done():
-			notify.Stop(backendChan)
 			l.Debugln(f.Type(), f.URI(), "Watch: Stopped")
 			return
 		}
 	}
 }
 
-func (*BasicFilesystem) eventType(notifyType notify.Event) EventType {
-	if notifyType&rmEventMask != 0 {
+// Map Watchman event types to custom EventType
+func (f *BasicFilesystem) mapWatchmanEventType(change watchman.StateChange) EventType {
+	switch change {
+	case watchman.Removed:
 		return Remove
+	case watchman.Created:
+		return NonRemove
+	case watchman.Updated:
+		return NonRemove
+	default:
+		return NonRemove
 	}
-	return NonRemove
 }
