@@ -48,12 +48,19 @@ func (f *BasicFilesystem) Watch(name string, ignore Matcher, ctx context.Context
 		return nil, nil, fmt.Errorf("failed to connect to Watchman: %w", err)
 	}
 
+	// Use sync.Once to ensure Close is called only once
+	var closeOnce sync.Once
+	closeClient := func() {
+		closeOnce.Do(func() {
+			wClient.Close()
+		})
+	}
+
 	// Ensure the client connection is closed when done
 	go func() {
 		<-ctx.Done()
-		wClient.Close()
+		closeClient()
 	}()
-
 	// Set up a watch on the directory without "/..."
 	watch, err := wClient.AddWatch(addWatchPath)
 	if err != nil {
