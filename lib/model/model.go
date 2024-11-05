@@ -74,7 +74,7 @@ type Model interface {
 	suture.Service
 
 	connections.Model
-
+	RescheduleFolder(folderID string) error
 	ResetFolder(folder string) error
 	DelayScan(folder string, next time.Duration)
 	ScanFolder(folder string) error
@@ -2920,6 +2920,8 @@ func (m *model) fileAvailabilityRLocked(cfg config.FolderConfiguration, snap *db
 			availabilities = append(availabilities, Availability{ID: device, FromTemporary: false})
 		}
 	}
+	return availabilities
+}
 
 func (m *model) blockAvailabilityFromTemporaryRLocked(cfg config.FolderConfiguration, file protocol.FileInfo, block protocol.BlockInfo) []Availability {
 	var availabilities []Availability
@@ -2928,7 +2930,6 @@ func (m *model) blockAvailabilityFromTemporaryRLocked(cfg config.FolderConfigura
 			availabilities = append(availabilities, Availability{ID: device.DeviceID, FromTemporary: true})
 		}
 	}
-
 	return availabilities
 }
 
@@ -2942,6 +2943,21 @@ func (m *model) BringToFront(folder, file string) {
 		runner.BringToFront(file)
 	}
 }
+
+func (m *model) RescheduleFolder(folderID string) error {
+    m.mut.RLock()
+    cfg, ok := m.folderCfgs[folderID]
+    m.mut.RUnlock()
+    if !ok {
+        return fmt.Errorf("folder '%s' not found", folderID)
+    }
+
+    newCfg := cfg
+
+    // Call restartFolder with the correct arguments
+    return m.restartFolder(cfg, newCfg, true)
+}
+
 
 func (m *model) ResetFolder(folder string) error {
 	m.mut.RLock()
